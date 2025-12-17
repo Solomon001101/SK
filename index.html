@@ -1,21 +1,23 @@
-   <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="uk">
 <head>
   <meta charset="utf-8" />
-  <title>AutoSelfie → Telegram</title>
+  <title>AutoSelfie → Telegram (виправлено)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,Arial;background:#0f1720;color:#e6eef8;display:flex;flex-direction:column;align-items:center;padding:20px}
     .card{background:#0b1220;border:1px solid #1f2a3a;padding:14px;border-radius:10px;max-width:820px;width:100%}
     button{padding:10px 16px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:16px;cursor:pointer}
-    pre{background:#07101a;color:#9fe6a8;padding:8px;border-radius:6px;white-space:pre-wrap;max-height:200px;overflow:auto}
-    video{display:none}
+    pre{background:#07101a;color:#9fe6a8;padding:8px;border-radius:6px;white-space:pre-wrap;max-height:240px;overflow:auto}
+    /* Важливо: відео не повинно бути display:none, інакше деякі браузери не рендерять кадри.
+       Ми ховаємо його поза екраном, але він залишається в DOM і рендериться. */
+    video{position:absolute;left:-9999px;top:auto;width:1px;height:1px;opacity:0}
     canvas{width:100%;max-width:480px;border-radius:8px;background:#000;display:block}
     button:disabled{opacity:0.6;cursor:default}
   </style>
 </head>
 <body>
-  <h2>Автоселфі → Telegram</h2>
+  <h2>Автоселфі → Telegram (виправлено)</h2>
   <div class="card">
     <p>Натисни кнопку, дозволь камеру. Фото зробиться автоматично і надійде в Telegram.</p>
 
@@ -23,6 +25,7 @@
       <button id="grantBtn">Надати доступ до камери</button>
     </div>
 
+    <!-- Відео приховано поза екраном, але рендериться -->
     <video id="video" autoplay playsinline muted></video>
 
     <div style="margin-top:12px">
@@ -60,7 +63,38 @@
 
     async function stopStream(stream){
       if(!stream) return;
-      stream.getTracks().forEach(t => t.stop());
+      try {
+        stream.getTracks().forEach(t => t.stop());
+      } catch(e){
+        console.warn('stopStream error', e);
+      }
+    }
+
+    // Чекаємо, поки відео почне відтворювати реальні кадри
+    function waitForVideoFrameReady(videoEl, timeout = 3000) {
+      return new Promise((resolve, reject) => {
+        const start = Date.now();
+
+        // Якщо доступна requestVideoFrameCallback — використовуємо її
+        if (videoEl.requestVideoFrameCallback) {
+          const onFrame = () => resolve();
+          // викликаємо один раз після першого кадру
+          videoEl.requestVideoFrameCallback(() => onFrame());
+          return;
+        }
+
+        // Інакше перевіряємо readyState і розміри
+        const check = () => {
+          if (videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+            resolve();
+          } else if (Date.now() - start > timeout) {
+            reject(new Error('timeout waiting for video frame'));
+          } else {
+            requestAnimationFrame(check);
+          }
+        };
+        check();
+      });
     }
 
     grantBtn.addEventListener('click', async () => {
@@ -79,30 +113,50 @@
       grantBtn.disabled = true;
       let stream = null;
       try {
+        // Використовуємо селфі-камеру (facingMode: "user")
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
         video.srcObject = stream;
-        log('Камера увімкнена, очікуємо метадані...');
+
+        // Деякі браузери вимагають виклику play()
+        try { await video.play(); } catch(e) { /* ignore */ }
+
+        log('Камера увімкнена, чекаємо перший кадр...');
+        await waitForVideoFrameReady(video, 4000);
+        log('Перший кадр отримано', video.videoWidth + 'x' + video.videoHeight);
       } catch (err) {
-        log('Помилка доступу до камери:', err.name || err);
-        alert('Не вдалося отримати доступ до камери: ' + (err.message || err.name));
+        log('Помилка доступу/очікування відео:', err && (err.message || err.name) || err);
+        alert('Не вдалося отримати доступ до камери або отримати кадр: ' + (err.message || err.name));
         grantBtn.disabled = false;
+        await stopStream(stream);
         return;
       }
 
-      video.addEventListener('loadedmetadata', async function once(){
-        log('Відео готове', video.videoWidth + 'x' + video.videoHeight);
-        await new Promise(r => setTimeout(r, 500));
-        // Зйомка
+      // Невелика додаткова пауза для стабілізації експозиції
+      await new Promise(r => setTimeout(r, 350));
+
+      try {
+        // Підбираємо розміри canvas відповідно до відео
         const w = video.videoWidth || 640;
         const h = video.videoHeight || 480;
-        canvas.width = w; canvas.height = h;
+        canvas.width = w;
+        canvas.height = h;
+
         const ctx = canvas.getContext('2d');
+
+        // Для селфі зазвичай хочуть дзеркальне відображення — якщо потрібно, розкоментуй:
+        // ctx.translate(w, 0); ctx.scale(-1, 1);
+
+        // Малюємо кадр
         ctx.drawImage(video, 0, 0, w, h);
         log('Кадр знято');
 
         // Отримуємо Blob
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-        if(!blob){ log('toBlob повернув null'); await stopStream(stream); grantBtn.disabled = false; return; }
+        if(!blob){
+          log('toBlob повернув null');
+          alert('Не вдалося сформувати зображення.');
+          return;
+        }
         log('Фото готове, байт:', blob.size);
 
         // Формуємо FormData для Telegram
@@ -113,27 +167,28 @@
         // Пряма відправка на Telegram Bot API
         const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
 
-        try {
-          log('Відправка в Telegram...');
-          const resp = await fetch(url, { method: 'POST', body: form });
-          const text = await resp.text().catch(()=> '[не вдалося прочитати тіло відповіді]');
-          log('Telegram відповів', resp.status, '-', text);
-          if(!resp.ok){
-            log('Увага: відправка неуспішна. Можлива проблема з CORS або токен/чат невірні.');
-            alert('Відправка неуспішна. Подивіться логи.');
-          } else {
-            alert('Фото відправлено в Telegram.');
-          }
-        } catch (err) {
-          log('Помилка при відправці:', err);
-          alert('Помилка при відправці. Можлива блокування CORS у браузері.');
-        } finally {
-          await stopStream(stream);
-          grantBtn.disabled = false;
-          log('Камера зупинена');
+        log('Відправка в Telegram...');
+        const resp = await fetch(url, { method: 'POST', body: form });
+
+        const text = await resp.text().catch(()=> '[не вдалося прочитати тіло відповіді]');
+        log('Telegram відповів', resp.status, '-', text);
+
+        if(!resp.ok){
+          // Якщо CORS блокує запит, браузер зазвичай кине помилку до catch.
+          log('Увага: відправка неуспішна. Можливі причини: CORS, неправильний токен або chat_id, або обмеження API.');
+          alert('Відправка неуспішна. Подивіться логи.');
+        } else {
+          alert('Фото відправлено в Telegram.');
         }
-      }, { once: true });
+      } catch (err) {
+        log('Помилка при відправці:', err);
+        alert('Помилка при відправці. Можлива блокування CORS у браузері або мережна помилка.');
+      } finally {
+        await stopStream(stream);
+        grantBtn.disabled = false;
+        log('Камера зупинена');
+      }
     });
   </script>
 </body>
-</html>     
+</html>
